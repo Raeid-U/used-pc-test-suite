@@ -1,0 +1,1 @@
+sudo ./log-telemetry.sh 10 ./telemetry-output.log
