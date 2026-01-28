@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -u
 
-# ---- Config (hardcoded download destination + throttling) ----
+# ---- Config (hardcoded download destination) ----
 DEST_DIR="$HOME/Downloads/download-client"
-
-# Start conservative. You can bump this up later (e.g. 2M, 3M).
-RATE_LIMIT="500K"
 
 # Seconds to wait between downloads (helps avoid bursty VPN/server behavior)
 SLEEP_BETWEEN=2
 
-# Curl retry behavior
+# Wget retry behavior
 RETRY_COUNT=5
 RETRY_DELAY=5
 
@@ -53,36 +50,35 @@ while IFS= read -r url || [[ -n "$url" ]]; do
 
   ((found++))
 
-  # Download sequentially into STAGING_DIR
-  # -f: fail on HTTP errors (4xx/5xx)
-  # -L: follow redirects
-  # -O: save as remote filename
-  # --limit-rate: throttle transfer speed (e.g. 500K, 2M, 3M)
-  # -C -: resume partial downloads (within this run / same staging dir)
-  # --retry...: retry transient errors (useful over VPNs)
-  curl_out="$(
+  # Download sequentially into STAGING_DIR using wget (IPv4 only)
+  # -4: force IPv4
+  # --content-disposition: honor server-provided filenames
+  # --trust-server-names: accept server name changes on redirects (useful for CDNs)
+  # -c: continue/resume partial downloads
+  # --tries/--waitretry: retry transient errors
+  # -q: quiet (still returns proper exit codes)
+  (
     cd "$STAGING_DIR" && \
-    curl -fL -O "$url" \
-      --limit-rate "$RATE_LIMIT" \
-      -C - \
-      --retry "$RETRY_COUNT" \
-      --retry-delay "$RETRY_DELAY" \
-      --retry-all-errors \
-      -sS \
-      -w '\n%{filename_effective}\n'
-  )"
+    wget -4 \
+      --content-disposition \
+      --trust-server-names \
+      -c \
+      --tries="$RETRY_COUNT" \
+      --waitretry="$RETRY_DELAY" \
+      -q \
+      "$url"
+  )
   rc=$?
 
   if [[ "$rc" -eq 0 ]]; then
-    filename="$(printf '%s' "$curl_out" | tail -n 1)"
+    # Determine the newest file in staging (wget doesn't reliably print final name in quiet mode)
+    filename="$(ls -1t "$STAGING_DIR" 2>/dev/null | head -n 1)"
     src_path="$STAGING_DIR/$filename"
 
     if [[ -n "$filename" && -f "$src_path" ]]; then
-      # Move into final destination (same name)
       mv -f "$src_path" "$DEST_DIR/"
       ((success++))
     else
-      # Unexpected edge case: curl reported success but file isn't there
       ((failed++))
       if [[ "$failed_file_created" -eq 0 ]]; then
         : > "$FAILED_FILE"
